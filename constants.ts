@@ -1,6 +1,4 @@
-import { Company, CompanyStatus, Invoice, InvoiceStatus } from './types';
-
-export const UNIT_PRICE = 5.00;
+import { Company, CompanyStatus, Invoice, InvoiceStatus, SystemLog } from './types';
 
 export const INITIAL_COMPANIES: Company[] = [
   {
@@ -9,7 +7,8 @@ export const INITIAL_COMPANIES: Company[] = [
     cnpj: '12.345.678/0001-90',
     contactName: 'Carlos Silva',
     status: CompanyStatus.ACTIVE,
-    createdAt: '2023-01-15'
+    createdAt: '2023-01-15',
+    employeeCount: 45
   },
   {
     id: '2',
@@ -17,7 +16,8 @@ export const INITIAL_COMPANIES: Company[] = [
     cnpj: '98.765.432/0001-10',
     contactName: 'João Santos',
     status: CompanyStatus.ACTIVE,
-    createdAt: '2023-03-10'
+    createdAt: '2023-03-10',
+    employeeCount: 12
   },
   {
     id: '3',
@@ -25,7 +25,8 @@ export const INITIAL_COMPANIES: Company[] = [
     cnpj: '45.678.901/0001-23',
     contactName: 'Mariana Costa',
     status: CompanyStatus.BLOCKED,
-    createdAt: '2023-06-20'
+    createdAt: '2023-06-20',
+    employeeCount: 150
   }
 ];
 
@@ -84,5 +85,29 @@ export const INITIAL_INVOICES: Invoice[] = [
     unitValue: 5.00,
     totalValue: 750.00,
     status: InvoiceStatus.PENDING
+  }
+];
+
+export const MOCK_LOGS: SystemLog[] = [
+  {
+    id: '1',
+    action: 'Login',
+    details: 'Usuário administrador acessou o painel',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
+    type: 'info'
+  },
+  {
+    id: '2',
+    action: 'Criação de Fatura',
+    details: 'Fatura lançada para TechSolutions Ltda (Ref: 11/2023)',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
+    type: 'success'
+  },
+  {
+    id: '3',
+    action: 'Alerta de Sistema',
+    details: 'Verificação automática de inadimplência concluída',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
+    type: 'warning'
   }
 ];

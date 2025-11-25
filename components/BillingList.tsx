@@ -1,13 +1,17 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Invoice, InvoiceStatus, Company } from '../types';
-import { UNIT_PRICE } from '../constants';
-import { Plus, CheckCircle, AlertTriangle, Clock, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Plus, CheckCircle, AlertTriangle, Clock, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Download, Printer, Zap, Calendar, Users, FileText } from 'lucide-react';
 
 interface BillingListProps {
   invoices: Invoice[];
   companies: Company[];
+  unitPrice: number; // Dynamic price
   onAddInvoice: (invoice: Omit<Invoice, 'id'>) => void;
   onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onDeleteInvoice: (id: string) => void;
+  onUpdateCompany: (id: string, updates: Partial<Company>) => void; // For batch edit
+  pendingAction?: string | null;
+  clearPendingAction?: () => void;
 }
 
 type SortKey = 'competence' | 'companyName' | 'totalValue' | 'dueDate' | 'status';
@@ -16,31 +20,52 @@ interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
-const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInvoice, onUpdateStatus }) => {
+const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPrice, onAddInvoice, onUpdateStatus, onDeleteInvoice, onUpdateCompany, pendingAction, clearPendingAction }) => {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterCompany, setFilterCompany] = useState<string>('');
   const [filterCompetence, setFilterCompetence] = useState<string>('');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'competence', direction: 'desc' });
+  
+  // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
 
-  // Form State
+  // Manual Form State
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
-  const [competenceInput, setCompetenceInput] = useState(''); // Stores MM/YYYY
-  const [employeeCount, setEmployeeCount] = useState<number>(0);
+  const [referenceDateInput, setReferenceDateInput] = useState(''); // YYYY-MM-DD
+  const [manualDueDate, setManualDueDate] = useState(''); // YYYY-MM-DD
+  const [invoiceNotes, setInvoiceNotes] = useState('');
+
+  // Batch Form State
+  const [batchReferenceDate, setBatchReferenceDate] = useState('');
+  const [batchDueDate, setBatchDueDate] = useState('');
+  const [batchEmployeeCounts, setBatchEmployeeCounts] = useState<{[key: string]: number}>({});
+
+  // Handle Quick Action
+  useEffect(() => {
+    if (pendingAction === 'CREATE') {
+      setIsModalOpen(true);
+      if (clearPendingAction) clearPendingAction();
+    }
+  }, [pendingAction, clearPendingAction]);
+
+  // Init Batch Counts
+  useEffect(() => {
+    if (isBatchModalOpen) {
+      const counts: any = {};
+      companies.filter(c => c.status === 'Ativo').forEach(c => {
+        counts[c.id] = c.employeeCount;
+      });
+      setBatchEmployeeCounts(counts);
+    }
+  }, [isBatchModalOpen, companies]);
 
   // Helpers
-  const formatCompetence = (val: string) => {
-    return val
-      .replace(/\D/g, '')
-      .replace(/^(\d{2})(\d)/, '$1/$2')
-      .substring(0, 7);
-  };
-
-  const convertInputToCompetence = (input: string) => {
-    // MM/YYYY -> YYYY-MM
-    const [month, year] = input.split('/');
-    if (month && year) return `${year}-${month}`;
-    return '';
+  const convertDateToCompetence = (dateStr: string) => {
+    // YYYY-MM-DD -> YYYY-MM
+    if (!dateStr) return '';
+    const [year, month] = dateStr.split('-');
+    return `${year}-${month}`;
   };
 
   const convertCompetenceToDisplay = (comp: string) => {
@@ -61,27 +86,12 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
     return dateString;
   };
 
-  const getDueDate = (compInput: string) => {
-    // Expects MM/YYYY
-    if (compInput.length === 7) {
-      const [month, year] = compInput.split('/');
-      // Ensure valid numbers before creating date
-      const m = parseInt(month, 10);
-      const y = parseInt(year, 10);
-      if (m >= 1 && m <= 12 && y > 1900) {
-        const lastDay = new Date(y, m, 0);
-        return lastDay;
-      }
-    }
-    return null;
-  };
-
   // 1. Filtering
   const filteredInvoices = invoices.filter(inv => {
     const matchesStatus = filterStatus === 'ALL' ? true : inv.status === filterStatus;
     const matchesCompany = filterCompany ? inv.companyId === filterCompany : true;
     const matchesCompetence = filterCompetence 
-      ? inv.competence === convertInputToCompetence(filterCompetence)
+      ? inv.competence.includes(filterCompetence) || convertCompetenceToDisplay(inv.competence).includes(filterCompetence)
       : true;
     
     return matchesStatus && matchesCompany && matchesCompetence;
@@ -90,9 +100,9 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
   // 2. Sorting
   const sortedInvoices = [...filteredInvoices].sort((a, b) => {
     const directionMult = sortConfig.direction === 'asc' ? 1 : -1;
-    
-    // String comparisons work for ISO Dates (dueDate, competence) and Names
+    // @ts-ignore
     if (a[sortConfig.key] < b[sortConfig.key]) return -1 * directionMult;
+    // @ts-ignore
     if (a[sortConfig.key] > b[sortConfig.key]) return 1 * directionMult;
     return 0;
   });
@@ -107,50 +117,46 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
   const getSortIcon = (key: SortKey) => {
     if (sortConfig.key !== key) return <ArrowUpDown size={14} className="text-slate-400 opacity-50" />;
     return sortConfig.direction === 'asc' 
-      ? <ArrowUp size={14} className="text-indigo-600" /> 
-      : <ArrowDown size={14} className="text-indigo-600" />;
+      ? <ArrowUp size={14} className="text-indigo-600 dark:text-indigo-400" /> 
+      : <ArrowDown size={14} className="text-indigo-600 dark:text-indigo-400" />;
+  };
+
+  // --- Manual Creation ---
+  
+  const handleReferenceDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const date = e.target.value;
+    setReferenceDateInput(date);
+    // Only auto-fill due date if it's empty to respect user edit
+    if (date && !manualDueDate) {
+      const d = new Date(date);
+      d.setDate(d.getDate() + 30);
+      setManualDueDate(d.toISOString().split('T')[0]);
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const company = companies.find(c => c.id === selectedCompanyId);
     if (!company) return;
-
-    // Strict Validation: Must be MM/YYYY where MM is 01-12
-    const strictRegex = /^(0[1-9]|1[0-2])\/\d{4}$/;
-
-    if (!strictRegex.test(competenceInput)) {
-      alert("Competência inválida. O mês deve ser entre 01 e 12 e o formato MM/AAAA (ex: 01/2025).");
+    if (!referenceDateInput || !manualDueDate) {
+      alert("Datas inválidas.");
       return;
     }
 
-    const [monthStr, yearStr] = competenceInput.split('/');
-    const year = parseInt(yearStr, 10);
-
-    if (year < 2000 || year > 2100) {
-      alert("Ano fora do escopo permitido.");
-      return;
-    }
-
-    const competence = convertInputToCompetence(competenceInput);
-    const dueDateObj = getDueDate(competenceInput);
-    
-    if (!dueDateObj) {
-      alert("Data de competência inválida.");
-      return;
-    }
-
-    // Check if invoice already exists for this company/competence could be added here, but not requested.
+    const competence = convertDateToCompetence(referenceDateInput);
+    const count = company.employeeCount;
 
     onAddInvoice({
       companyId: company.id,
       companyName: company.name,
       competence,
-      dueDate: dueDateObj.toISOString().split('T')[0],
-      employeeCount,
-      unitValue: UNIT_PRICE,
-      totalValue: employeeCount * UNIT_PRICE,
-      status: InvoiceStatus.PENDING
+      dueDate: manualDueDate,
+      employeeCount: count,
+      unitValue: unitPrice,
+      totalValue: count * unitPrice,
+      status: InvoiceStatus.PENDING,
+      // @ts-ignore
+      notes: invoiceNotes
     });
     setIsModalOpen(false);
     resetForm();
@@ -158,70 +164,156 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
 
   const resetForm = () => {
     setSelectedCompanyId('');
-    setCompetenceInput('');
-    setEmployeeCount(0);
+    setReferenceDateInput('');
+    setManualDueDate('');
+    setInvoiceNotes('');
   };
 
-  const handleCompetenceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setCompetenceInput(formatCompetence(e.target.value));
-  };
-  
-  const handleFilterCompetenceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFilterCompetence(formatCompetence(e.target.value));
-  };
+  // --- Batch Creation ---
 
-  // Status Badge Helper
-  const getStatusBadge = (status: InvoiceStatus) => {
-    switch (status) {
-      case InvoiceStatus.PAID:
-        return <span className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-emerald-100 text-emerald-700"><CheckCircle size={12}/> Pago</span>;
-      case InvoiceStatus.OVERDUE:
-        return <span className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-red-100 text-red-700"><AlertTriangle size={12}/> Vencido</span>;
-      default:
-        return <span className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700"><Clock size={12}/> Pendente</span>;
+  const handleBatchReferenceDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const date = e.target.value;
+    setBatchReferenceDate(date);
+    if (date) {
+      const d = new Date(date);
+      d.setDate(d.getDate() + 30);
+      setBatchDueDate(d.toISOString().split('T')[0]);
+    } else {
+      setBatchDueDate('');
     }
   };
 
-  const calculatedDueDate = getDueDate(competenceInput);
+  const handleBatchSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!batchReferenceDate || !batchDueDate) {
+          alert("Por favor selecione a data de referência.");
+          return;
+      }
+
+      const competence = convertDateToCompetence(batchReferenceDate);
+      const activeCompanies = companies.filter(c => c.status === 'Ativo');
+      
+      if (activeCompanies.length === 0) {
+          alert("Nenhuma empresa ativa encontrada.");
+          return;
+      }
+
+      // Process Updates and Creations
+      activeCompanies.forEach(company => {
+          const currentCount = company.employeeCount;
+          const newCount = batchEmployeeCounts[company.id];
+
+          // 1. Update company if count changed
+          if (newCount !== undefined && newCount !== currentCount) {
+              onUpdateCompany(company.id, { employeeCount: newCount });
+          }
+
+          // 2. Generate Invoice using NEW count
+          const finalCount = newCount !== undefined ? newCount : currentCount;
+
+          onAddInvoice({
+              companyId: company.id,
+              companyName: company.name,
+              competence,
+              dueDate: batchDueDate,
+              employeeCount: finalCount,
+              unitValue: unitPrice,
+              totalValue: finalCount * unitPrice,
+              status: InvoiceStatus.PENDING
+          });
+      });
+
+      alert(`${activeCompanies.length} faturas geradas com sucesso!`);
+      setIsBatchModalOpen(false);
+      setBatchReferenceDate('');
+      setBatchDueDate('');
+  };
+
+  // Export Mock
+  const handleExport = (type: 'CSV' | 'PDF') => {
+      if (type === 'PDF') {
+          window.print();
+      } else {
+          const csvContent = "data:text/csv;charset=utf-8," 
+              + "Competencia,Empresa,Funcionarios,Valor,Vencimento,Status\n"
+              + invoices.map(i => `${convertCompetenceToDisplay(i.competence)},${i.companyName},${i.employeeCount},${i.totalValue},${i.dueDate},${i.status}`).join("\n");
+          const encodedUri = encodeURI(csvContent);
+          const link = document.createElement("a");
+          link.setAttribute("href", encodedUri);
+          link.setAttribute("download", "faturas.csv");
+          document.body.appendChild(link);
+          link.click();
+      }
+  };
+
+  // Status Badge
+  const getStatusBadge = (status: InvoiceStatus) => {
+    switch (status) {
+      case InvoiceStatus.PAID:
+        return <span className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><CheckCircle size={12}/> Pago</span>;
+      case InvoiceStatus.OVERDUE:
+        return <span className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"><AlertTriangle size={12}/> Vencido</span>;
+      default:
+        return <span className="flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><Clock size={12}/> Pendente</span>;
+    }
+  };
+
+  const confirmDelete = (id: string) => {
+    if (window.confirm("Tem certeza que deseja excluir esta fatura?")) {
+      onDeleteInvoice(id);
+    }
+  };
+
+  const inputClass = "w-full p-2 bg-white dark:bg-slate-950 text-slate-900 dark:text-white border border-slate-300 dark:border-slate-700 rounded focus:ring-indigo-500 outline-none";
+  const selectClass = "p-2 text-sm bg-white dark:bg-slate-950 text-slate-900 dark:text-white border border-slate-300 dark:border-slate-700 rounded focus:ring-indigo-500 focus:border-indigo-500 outline-none";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fadeIn">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h2 className="text-2xl font-bold text-slate-800">Controle de Faturas</h2>
-        <button 
-          onClick={() => setIsModalOpen(true)}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm"
-        >
-          <Plus size={18} />
-          Gerar Fatura
-        </button>
+        <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Controle de Faturas</h2>
+        <div className="flex gap-2">
+            <button 
+                onClick={() => setIsBatchModalOpen(true)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm text-sm"
+            >
+                <Zap size={16} />
+                Gerar Lote Mensal
+            </button>
+            <button 
+            onClick={() => setIsModalOpen(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm text-sm"
+            >
+            <Plus size={16} />
+            Avulso
+            </button>
+        </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-sm border border-slate-200 overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden transition-colors">
         {/* Filters */}
-        <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col md:flex-row gap-4 items-center">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex flex-col md:flex-row gap-4 items-center">
           <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto pb-2 md:pb-0">
              <button 
               onClick={() => setFilterStatus('ALL')}
-              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === 'ALL' ? 'bg-white text-indigo-600 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === 'ALL' ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               Todas
             </button>
             <button 
               onClick={() => setFilterStatus(InvoiceStatus.PENDING)}
-              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === InvoiceStatus.PENDING ? 'bg-white text-amber-600 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === InvoiceStatus.PENDING ? 'bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               Pendentes
             </button>
             <button 
               onClick={() => setFilterStatus(InvoiceStatus.PAID)}
-              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === InvoiceStatus.PAID ? 'bg-white text-emerald-600 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === InvoiceStatus.PAID ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-emerald-400 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               Pagas
             </button>
             <button 
               onClick={() => setFilterStatus(InvoiceStatus.OVERDUE)}
-              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === InvoiceStatus.OVERDUE ? 'bg-white text-red-600 shadow-sm ring-1 ring-slate-200' : 'text-slate-500 hover:text-slate-700'}`}
+              className={`px-3 py-1.5 text-sm rounded-md font-medium whitespace-nowrap transition-colors ${filterStatus === InvoiceStatus.OVERDUE ? 'bg-white dark:bg-slate-800 text-red-600 dark:text-red-400 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               Vencidas
             </button>
@@ -231,7 +323,7 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
             <select
                value={filterCompany}
                onChange={(e) => setFilterCompany(e.target.value)}
-               className="flex-1 md:max-w-xs p-2 text-sm bg-white text-black border border-slate-300 rounded focus:ring-indigo-500 focus:border-indigo-500"
+               className={`flex-1 md:max-w-xs ${selectClass}`}
             >
               <option value="">Todas Empresas</option>
               {companies.map(c => (
@@ -240,29 +332,30 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
             </select>
             <input 
               type="text" 
-              placeholder="MM/AAAA"
+              placeholder="Filtro (MM/AAAA)..."
               value={filterCompetence}
-              onChange={handleFilterCompetenceChange}
-              className="w-32 p-2 text-sm bg-white text-black border border-slate-300 rounded focus:ring-indigo-500 focus:border-indigo-500"
+              onChange={(e) => setFilterCompetence(e.target.value)}
+              className={`w-36 ${selectClass}`}
             />
-            {(filterCompany || filterCompetence) && (
-              <button 
-                onClick={() => { setFilterCompany(''); setFilterCompetence(''); }}
-                className="text-xs text-slate-500 hover:text-slate-700 underline px-2"
-              >
-                Limpar
-              </button>
-            )}
+            
+            <div className="flex gap-1">
+                <button onClick={() => handleExport('CSV')} title="Exportar CSV" className="p-2 text-slate-500 hover:text-indigo-600 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded transition-colors">
+                    <Download size={16} />
+                </button>
+                <button onClick={() => handleExport('PDF')} title="Imprimir" className="p-2 text-slate-500 hover:text-indigo-600 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded transition-colors">
+                    <Printer size={16} />
+                </button>
+            </div>
           </div>
         </div>
 
         {/* Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">
-            <thead className="text-xs text-slate-500 uppercase bg-slate-50 border-b border-slate-200">
+            <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800">
               <tr>
                 <th 
-                  className="px-6 py-3 cursor-pointer hover:bg-slate-100 transition-colors select-none group"
+                  className="px-6 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors select-none group"
                   onClick={() => handleSort('competence')}
                 >
                   <div className="flex items-center gap-1">
@@ -270,16 +363,16 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
                   </div>
                 </th>
                 <th 
-                  className="px-6 py-3 cursor-pointer hover:bg-slate-100 transition-colors select-none group"
+                  className="px-6 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors select-none group"
                   onClick={() => handleSort('companyName')}
                 >
                   <div className="flex items-center gap-1">
                     Empresa {getSortIcon('companyName')}
                   </div>
                 </th>
-                <th className="px-6 py-3 text-center">Vidas</th>
+                <th className="px-6 py-3 text-center">Funcionários</th>
                 <th 
-                  className="px-6 py-3 text-right cursor-pointer hover:bg-slate-100 transition-colors select-none group"
+                  className="px-6 py-3 text-right cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors select-none group"
                   onClick={() => handleSort('totalValue')}
                 >
                    <div className="flex items-center justify-end gap-1">
@@ -287,7 +380,7 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
                   </div>
                 </th>
                 <th 
-                   className="px-6 py-3 cursor-pointer hover:bg-slate-100 transition-colors select-none group"
+                   className="px-6 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors select-none group"
                    onClick={() => handleSort('dueDate')}
                 >
                   <div className="flex items-center gap-1">
@@ -295,61 +388,68 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
                   </div>
                 </th>
                 <th 
-                  className="px-6 py-3 cursor-pointer hover:bg-slate-100 transition-colors select-none group"
+                  className="px-6 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors select-none group"
                   onClick={() => handleSort('status')}
                 >
                   <div className="flex items-center gap-1">
                     Status {getSortIcon('status')}
                   </div>
                 </th>
-                <th className="px-6 py-3 text-right">Alterar Status</th>
+                <th className="px-6 py-3 text-right">Ações</th>
               </tr>
             </thead>
             <tbody>
               {sortedInvoices.length > 0 ? (
                 sortedInvoices.map((inv) => (
-                  <tr key={inv.id} className="bg-white border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4 font-medium text-slate-900">
+                  <tr key={inv.id} className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                    <td className="px-6 py-4 font-medium text-slate-900 dark:text-white">
                       {convertCompetenceToDisplay(inv.competence)}
                     </td>
-                    <td className="px-6 py-4 text-slate-700">
+                    <td className="px-6 py-4 text-slate-700 dark:text-slate-300">
                       {inv.companyName}
                     </td>
-                    <td className="px-6 py-4 text-center text-slate-700">
+                    <td className="px-6 py-4 text-center text-slate-700 dark:text-slate-300">
                       {inv.employeeCount}
                     </td>
-                    <td className="px-6 py-4 text-right font-medium text-slate-900">
+                    <td className="px-6 py-4 text-right font-medium text-slate-900 dark:text-white">
                       {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(inv.totalValue)}
                       <div className="text-xs text-slate-400 font-normal">({new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(inv.unitValue)}/uni)</div>
                     </td>
-                    <td className="px-6 py-4 text-slate-600">
+                    <td className="px-6 py-4 text-slate-600 dark:text-slate-400">
                       {formatDateToDDMMYYYY(inv.dueDate)}
                     </td>
                     <td className="px-6 py-4">
                       {getStatusBadge(inv.status)}
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right flex items-center justify-end gap-2">
                       <select
                         value={inv.status}
                         onChange={(e) => onUpdateStatus(inv.id, e.target.value as InvoiceStatus)}
                         className={`text-xs py-1 px-2 rounded border focus:ring-2 outline-none cursor-pointer ${
                           inv.status === InvoiceStatus.PAID 
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200 focus:ring-emerald-500' 
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-400 dark:border-emerald-800 focus:ring-emerald-500' 
                             : inv.status === InvoiceStatus.OVERDUE 
-                              ? 'bg-red-50 text-red-800 border-red-200 focus:ring-red-500'
-                              : 'bg-white text-slate-700 border-slate-300 focus:ring-indigo-500'
+                              ? 'bg-red-50 text-red-800 border-red-200 dark:bg-red-900/20 dark:text-red-400 dark:border-red-800 focus:ring-red-500'
+                              : 'bg-white text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600 focus:ring-indigo-500'
                         }`}
                       >
                         <option value={InvoiceStatus.PENDING}>Pendente</option>
                         <option value={InvoiceStatus.PAID}>Pago</option>
                         <option value={InvoiceStatus.OVERDUE}>Vencido</option>
                       </select>
+                      <button 
+                        onClick={() => confirmDelete(inv.id)}
+                        className="p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors"
+                        title="Excluir fatura"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </td>
                   </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="px-6 py-8 text-center text-slate-500">
+                  <td colSpan={7} className="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
                     Nenhuma fatura encontrada.
                   </td>
                 </tr>
@@ -359,72 +459,158 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, onAddInv
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Manual Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
-            <div className="p-6 border-b border-slate-200">
-              <h3 className="text-xl font-bold text-slate-800">Lançar Fatura</h3>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fadeIn backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-md border border-slate-200 dark:border-slate-800">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-800">
+              <h3 className="text-xl font-bold text-slate-800 dark:text-white">Lançar Fatura Avulsa</h3>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Empresa</label>
+                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Empresa</label>
                 <select 
                   required 
                   value={selectedCompanyId} 
                   onChange={e => setSelectedCompanyId(e.target.value)}
-                  className="w-full p-2 bg-white text-black border border-slate-300 rounded focus:ring-indigo-500 focus:border-indigo-500"
+                  className={inputClass}
                 >
                   <option value="">Selecione...</option>
                   {companies.filter(c => c.status === 'Ativo').map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
+                    <option key={c.id} value={c.id}>{c.name} ({c.employeeCount} func.)</option>
                   ))}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Competência</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Data de Referência</label>
                   <input 
                     required 
-                    type="text" 
-                    placeholder="MM/AAAA"
-                    value={competenceInput} 
-                    onChange={handleCompetenceChange}
-                    className="w-full p-2 bg-white text-black border border-slate-300 rounded focus:ring-indigo-500 focus:border-indigo-500" 
+                    type="date"
+                    value={referenceDateInput} 
+                    onChange={handleReferenceDateChange}
+                    className={inputClass}
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">Define competência: {convertDateToCompetence(referenceDateInput) || '--'}</p>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Vencimento</label>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Vencimento</label>
                   <input 
-                    readOnly
-                    type="text" 
-                    value={calculatedDueDate ? formatDateToDDMMYYYY(calculatedDueDate.toISOString().split('T')[0]) : '-'}
-                    className="w-full p-2 bg-slate-100 text-slate-600 border border-slate-300 rounded cursor-not-allowed" 
+                    required
+                    type="date" 
+                    value={manualDueDate}
+                    onChange={(e) => setManualDueDate(e.target.value)}
+                    className={inputClass}
                   />
-                  <span className="text-xs text-slate-500">Automático (Último dia)</span>
                 </div>
               </div>
+              
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Qtd. Funcionários</label>
-                <input 
-                  required 
-                  type="number" 
-                  min="1"
-                  value={employeeCount} 
-                  onChange={e => setEmployeeCount(Number(e.target.value))}
-                  className="w-full p-2 bg-white text-black border border-slate-300 rounded focus:ring-indigo-500 focus:border-indigo-500" 
-                />
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notas Internas</label>
+                  <textarea 
+                    value={invoiceNotes}
+                    onChange={(e) => setInvoiceNotes(e.target.value)}
+                    rows={2}
+                    placeholder="Obs. sobre a fatura..."
+                    className={inputClass}
+                  />
               </div>
-              <div className="bg-slate-50 p-3 rounded text-sm text-slate-600 flex justify-between">
-                <span>Total Estimado:</span>
-                <span className="font-bold text-slate-900">
-                  {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(employeeCount * UNIT_PRICE)}
-                </span>
+
+              <div className="bg-indigo-50 dark:bg-indigo-900/30 p-3 rounded text-sm text-indigo-800 dark:text-indigo-300 flex items-start gap-2">
+                 <Zap size={16} className="mt-0.5 shrink-0" />
+                 <span>O valor será calculado automaticamente baseado no nº atual de funcionários cadastrados na empresa (x R$ {unitPrice}).</span>
               </div>
               
               <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded">Cancelar</button>
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded">Cancelar</button>
                 <button type="submit" className="px-4 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded shadow-sm">Lançar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Batch Generation Modal */}
+      {isBatchModalOpen && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fadeIn backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-2xl border border-slate-200 dark:border-slate-800 flex flex-col max-h-[90vh]">
+            <div className="p-6 border-b border-slate-200 dark:border-slate-800 bg-emerald-50 dark:bg-emerald-900/10">
+              <h3 className="text-xl font-bold text-emerald-800 dark:text-emerald-400 flex items-center gap-2">
+                  <Zap size={20} />
+                  Gerar Lote Mensal
+              </h3>
+            </div>
+            
+            <form onSubmit={handleBatchSubmit} className="flex-1 flex flex-col overflow-hidden">
+               <div className="p-6 space-y-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Data de Referência</label>
+                      <input 
+                        required 
+                        type="date" 
+                        value={batchReferenceDate} 
+                        onChange={handleBatchReferenceDateChange}
+                        className={inputClass}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Vencimento</label>
+                      <input 
+                        required
+                        type="date" 
+                        value={batchDueDate}
+                        onChange={(e) => setBatchDueDate(e.target.value)}
+                        className={inputClass}
+                      />
+                    </div>
+                  </div>
+               </div>
+
+               <div className="flex-1 overflow-y-auto p-6 bg-white dark:bg-slate-900">
+                   <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3 flex items-center gap-2">
+                       <Users size={16} /> 
+                       Confirme os Funcionários Ativos
+                   </h4>
+                   <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
+                       <table className="w-full text-sm">
+                           <thead className="bg-slate-50 dark:bg-slate-950 text-xs text-slate-500 dark:text-slate-400 uppercase text-left">
+                               <tr>
+                                   <th className="px-4 py-2">Empresa</th>
+                                   <th className="px-4 py-2 w-32">Funcionários</th>
+                                   <th className="px-4 py-2 w-32 text-right">Valor Est.</th>
+                               </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                               {companies.filter(c => c.status === 'Ativo').map(c => (
+                                   <tr key={c.id} className="bg-white dark:bg-slate-900">
+                                       <td className="px-4 py-3 text-slate-800 dark:text-slate-200 font-medium">
+                                           {c.name}
+                                       </td>
+                                       <td className="px-4 py-3">
+                                           <input 
+                                              type="number"
+                                              min="0"
+                                              value={batchEmployeeCounts[c.id] ?? c.employeeCount}
+                                              onChange={(e) => setBatchEmployeeCounts(prev => ({...prev, [c.id]: Number(e.target.value)}))}
+                                              className="w-full p-1 border border-slate-300 dark:border-slate-700 rounded text-center bg-white text-slate-900 dark:bg-slate-950 dark:text-white outline-none focus:ring-1 focus:ring-emerald-500"
+                                           />
+                                       </td>
+                                       <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">
+                                           {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format((batchEmployeeCounts[c.id] ?? c.employeeCount) * unitPrice)}
+                                       </td>
+                                   </tr>
+                               ))}
+                           </tbody>
+                       </table>
+                   </div>
+               </div>
+              
+              <div className="p-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-3 bg-white dark:bg-slate-900">
+                <button type="button" onClick={() => setIsBatchModalOpen(false)} className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded">Cancelar</button>
+                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white hover:bg-emerald-700 rounded shadow-sm">
+                    Confirmar e Gerar
+                </button>
               </div>
             </form>
           </div>

@@ -13,6 +13,8 @@ export interface Company {
   contactName: string;
   status: CompanyStatus;
   createdAt: string;
+  employeeCount: number; // Stored count for auto-billing
+  notes?: string; // Internal CRM notes
 }
 
 export enum InvoiceStatus {
@@ -38,4 +40,20 @@ export interface DashboardStats {
   pendingRevenue: number;
   activeCompanies: number;
   totalEmployees: number;
+}
+
+export interface SystemLog {
+  id: string;
+  action: string;
+  details: string;
+  timestamp: string;
+  user?: string;
+  type: 'info' | 'warning' | 'error' | 'success';
+}
+
+export interface AppSettings {
+  unitPrice: number;
+  dueDay: number;
+  apiKey: string;
+  theme: 'light' | 'dark';
 }
