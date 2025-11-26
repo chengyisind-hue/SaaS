@@ -27,6 +27,13 @@ const Reports: React.FC<ReportsProps> = ({ companies, invoices, theme }) => {
   const delinquencyRate = totalInvoices > 0 ? (overdueInvoices.length / totalInvoices) * 100 : 0;
   const delinquencyAmount = overdueInvoices.reduce((acc, curr) => acc + curr.totalValue, 0);
 
+  // Dynamic LTV Calculation
+  // Formula: Average Ticket / Churn Rate (decimal). 
+  // If churn is 0, we can use a cap or estimate based on 12-24 months retention.
+  const ltv = churnRate > 0.01 
+    ? averageTicket / (churnRate / 100) 
+    : averageTicket * 24; // If churn is 0, assume 24 months lifetime
+
   // --- Charts Data ---
 
   // Status Distribution
@@ -126,14 +133,14 @@ const Reports: React.FC<ReportsProps> = ({ companies, invoices, theme }) => {
             <div>
               <p className="text-sm text-slate-600 dark:text-slate-400 font-medium">LTV Estimado</p>
               <h3 className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                R$ 1.250
+                {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(ltv)}
               </h3>
             </div>
             <div className="p-2 bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-lg">
               <TrendingUp size={20} />
             </div>
           </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Valor vitalício (Mockado)</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">Valor vitalício por cliente</p>
         </div>
       </div>
 

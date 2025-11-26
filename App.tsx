@@ -94,7 +94,8 @@ const App: React.FC = () => {
     employeeCount: dbInvoice.employee_count,
     unitValue: dbInvoice.unit_value,
     totalValue: dbInvoice.total_value,
-    status: dbInvoice.status as InvoiceStatus
+    status: dbInvoice.status as InvoiceStatus,
+    notes: dbInvoice.notes
   });
 
   // --- Fetch Data ---
@@ -118,11 +119,23 @@ const App: React.FC = () => {
     }
 
     try {
-      // O RLS do Supabase já vai filtrar automaticamente baseando-se no session.user.id
-      const { data: companiesData, error: companiesError } = await supabase.from('companies').select('*').order('name');
+      // SECURITY UPGRADE: Explicitly filter by user_id even if RLS fails
+      // Note: RLS is the primary security, this is a fallback/helper
+      
+      const { data: companiesData, error: companiesError } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('user_id', session.user.id) 
+        .order('name');
+        
       if (companiesError) throw companiesError;
 
-      const { data: invoicesData, error: invoicesError } = await supabase.from('invoices').select('*').order('competence', { ascending: false });
+      const { data: invoicesData, error: invoicesError } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('competence', { ascending: false });
+        
       if (invoicesError) throw invoicesError;
 
       const mappedCompanies = (companiesData || []).map(mapCompanyFromDB);
@@ -177,7 +190,7 @@ const App: React.FC = () => {
 
     if (isDemoMode) {
       const mockCompany = { ...newCompanyData, id: tempId, createdAt: now };
-      setCompanies([...companies, mockCompany]);
+      setCompanies(prev => [...prev, mockCompany]);
       addLog('Cadastro Empresa', `Empresa ${newCompanyData.name} cadastrada com ${newCompanyData.employeeCount} funcionários.`, 'success');
       return;
     }
@@ -195,7 +208,7 @@ const App: React.FC = () => {
 
       if (error) throw error;
       if (data) {
-        setCompanies([...companies, mapCompanyFromDB(data)]);
+        setCompanies(prev => [...prev, mapCompanyFromDB(data)]);
         addLog('Cadastro Empresa', `Empresa ${newCompanyData.name} cadastrada.`, 'success');
       }
     } catch (error: any) {
@@ -210,7 +223,7 @@ const App: React.FC = () => {
     if (!company) return;
 
     if (isDemoMode) {
-      setCompanies(companies.map(c => c.id === id ? { ...c, ...updates } : c));
+      setCompanies(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
       
       if (updates.status) addLog('Status Empresa', `Status da ${company.name} alterado para ${updates.status}.`, 'info');
       if (updates.employeeCount !== undefined) addLog('Atualização Empresa', `Funcionários da ${company.name} atualizados para ${updates.employeeCount}.`, 'info');
@@ -227,7 +240,7 @@ const App: React.FC = () => {
       const { error } = await supabase.from('companies').update(dbUpdates).eq('id', id);
       if (error) throw error;
       
-      setCompanies(companies.map(c => c.id === id ? { ...c, ...updates } : c));
+      setCompanies(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
       
       if (updates.status) addLog('Status Empresa', `Status da ${company.name} alterado para ${updates.status}.`, 'info');
       if (updates.employeeCount !== undefined) addLog('Atualização Empresa', `Funcionários da ${company.name} atualizados para ${updates.employeeCount}.`, 'info');
@@ -240,8 +253,8 @@ const App: React.FC = () => {
     const companyName = companies.find(c => c.id === id)?.name || 'Empresa';
 
     if (isDemoMode) {
-      setCompanies(companies.filter(c => c.id !== id));
-      setInvoices(invoices.filter(i => i.companyId !== id));
+      setCompanies(prev => prev.filter(c => c.id !== id));
+      setInvoices(prev => prev.filter(i => i.companyId !== id));
       addLog('Exclusão Empresa', `Empresa ${companyName} e seus dados foram removidos.`, 'warning');
       return;
     }
@@ -249,8 +262,8 @@ const App: React.FC = () => {
     try {
       const { error } = await supabase.from('companies').delete().eq('id', id);
       if (error) throw error;
-      setCompanies(companies.filter(c => c.id !== id));
-      setInvoices(invoices.filter(i => i.companyId !== id));
+      setCompanies(prev => prev.filter(c => c.id !== id));
+      setInvoices(prev => prev.filter(i => i.companyId !== id));
       addLog('Exclusão Empresa', `Empresa ${companyName} removida.`, 'warning');
     } catch (error: any) {
       alert(`Erro: ${error.message}`);
@@ -266,7 +279,7 @@ const App: React.FC = () => {
 
     if (isDemoMode) {
       const mockInvoice = { ...newInvoiceData, id: Math.random().toString(), status: initialStatus };
-      setInvoices([...invoices, mockInvoice]);
+      setInvoices(prev => [...prev, mockInvoice]);
       addLog('Nova Fatura', `Fatura gerada para ${newInvoiceData.companyName} (${newInvoiceData.competence}).`, 'success');
       return;
     }
@@ -281,12 +294,13 @@ const App: React.FC = () => {
         unit_value: newInvoiceData.unitValue,
         total_value: newInvoiceData.totalValue,
         status: initialStatus,
+        notes: newInvoiceData.notes,
         user_id: session?.user?.id // VINCULA AO USUÁRIO LOGADO
       }]).select().single();
 
       if (error) throw error;
       if (data) {
-        setInvoices([...invoices, mapInvoiceFromDB(data)]);
+        setInvoices(prev => [...prev, mapInvoiceFromDB(data)]);
         addLog('Nova Fatura', `Fatura gerada para ${newInvoiceData.companyName}.`, 'success');
       }
     } catch (error: any) {
@@ -296,7 +310,7 @@ const App: React.FC = () => {
 
   const handleUpdateInvoiceStatus = async (id: string, status: InvoiceStatus) => {
     if (isDemoMode) {
-      setInvoices(invoices.map(i => i.id === id ? { ...i, status } : i));
+      setInvoices(prev => prev.map(i => i.id === id ? { ...i, status } : i));
       addLog('Atualização Fatura', `Status da fatura alterado para ${status}.`, 'info');
       return;
     }
@@ -304,7 +318,7 @@ const App: React.FC = () => {
     try {
       const { error } = await supabase.from('invoices').update({ status }).eq('id', id);
       if (error) throw error;
-      setInvoices(invoices.map(i => i.id === id ? { ...i, status } : i));
+      setInvoices(prev => prev.map(i => i.id === id ? { ...i, status } : i));
       addLog('Atualização Fatura', `Status da fatura alterado para ${status}.`, 'info');
     } catch (error: any) {
       alert(`Erro: ${error.message}`);
@@ -313,7 +327,7 @@ const App: React.FC = () => {
 
   const handleDeleteInvoice = async (id: string) => {
     if (isDemoMode) {
-      setInvoices(invoices.filter(i => i.id !== id));
+      setInvoices(prev => prev.filter(i => i.id !== id));
       addLog('Exclusão Fatura', `Fatura removida do sistema.`, 'warning');
       return;
     }
@@ -321,7 +335,7 @@ const App: React.FC = () => {
     try {
       const { error } = await supabase.from('invoices').delete().eq('id', id);
       if (error) throw error;
-      setInvoices(invoices.filter(i => i.id !== id));
+      setInvoices(prev => prev.filter(i => i.id !== id));
       addLog('Exclusão Fatura', `Fatura removida do sistema.`, 'warning');
     } catch (error: any) {
       alert(`Erro: ${error.message}`);
@@ -331,6 +345,10 @@ const App: React.FC = () => {
   const handleLogout = async () => {
     addLog('Logout', 'Usuário desconectado.', 'info');
     await supabase.auth.signOut();
+    // Clear data immediately to prevent ghost data for next user on same PC
+    setCompanies([]);
+    setInvoices([]);
+    setLogs([]);
     setIsDemoMode(false); 
     setSession(null);
   };
@@ -421,9 +439,9 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar - FIXED position on desktop */}
       <aside className={`
-        fixed inset-y-0 left-0 z-30 w-64 bg-slate-900 dark:bg-black text-white transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static lg:inset-auto flex flex-col
+        fixed inset-y-0 left-0 z-30 w-64 bg-slate-900 dark:bg-black text-white transform transition-transform duration-200 ease-in-out lg:translate-x-0 flex flex-col
         ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         <div className="p-6 border-b border-slate-800 flex items-center justify-between">
@@ -486,8 +504,8 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Main Content - Added padding-left for desktop to account for fixed sidebar */}
+      <div className="flex-1 flex flex-col min-w-0 lg:pl-64 transition-all duration-200">
         <header className="lg:hidden bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 p-4 flex items-center justify-between sticky top-0 z-10">
           <h1 className="font-bold text-slate-800 dark:text-white">PontoGestor Admin</h1>
           <button onClick={() => setIsSidebarOpen(true)} className="text-slate-600 dark:text-slate-300">

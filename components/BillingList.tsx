@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Invoice, InvoiceStatus, Company } from '../types';
-import { Plus, CheckCircle, AlertTriangle, Clock, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Download, Printer, Zap, Calendar, Users, FileText } from 'lucide-react';
+import { Plus, CheckCircle, AlertTriangle, Clock, ArrowUpDown, ArrowUp, ArrowDown, Trash2, Download, Printer, Zap, Calendar, Users, FileText, Eye, X } from 'lucide-react';
 
 interface BillingListProps {
   invoices: Invoice[];
@@ -20,6 +20,11 @@ interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
+interface BatchSortConfig {
+    key: 'name' | 'employeeCount';
+    direction: 'asc' | 'desc';
+}
+
 const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPrice, onAddInvoice, onUpdateStatus, onDeleteInvoice, onUpdateCompany, pendingAction, clearPendingAction }) => {
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [filterCompany, setFilterCompany] = useState<string>('');
@@ -29,6 +34,7 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
   // Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
+  const [viewNoteId, setViewNoteId] = useState<string | null>(null);
 
   // Manual Form State
   const [selectedCompanyId, setSelectedCompanyId] = useState('');
@@ -40,6 +46,7 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
   const [batchReferenceDate, setBatchReferenceDate] = useState('');
   const [batchDueDate, setBatchDueDate] = useState('');
   const [batchEmployeeCounts, setBatchEmployeeCounts] = useState<{[key: string]: number}>({});
+  const [batchSortConfig, setBatchSortConfig] = useState<BatchSortConfig>({ key: 'name', direction: 'asc' });
 
   // Handle Quick Action
   useEffect(() => {
@@ -62,7 +69,7 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
 
   // Helpers
   const convertDateToCompetence = (dateStr: string) => {
-    // YYYY-MM-DD -> YYYY-MM
+    // YYYY-MM -> YYYY-MM
     if (!dateStr) return '';
     const [year, month] = dateStr.split('-');
     return `${year}-${month}`;
@@ -86,13 +93,28 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
     return dateString;
   };
 
+  // Safe date math to avoid timezone issues
+  const addDaysToDate = (dateStr: string, days: number): string => {
+    if (!dateStr) return '';
+    const [y, m, d] = dateStr.split('-').map(Number);
+    // Month is 0-indexed in JS Date, day is 1-indexed.
+    // However, to do math, we can rely on Date auto-correction
+    const date = new Date(y, m - 1, d + days);
+    
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Get unique competences for dropdown
+  const uniqueCompetences = Array.from(new Set(invoices.map(i => i.competence))).sort().reverse();
+
   // 1. Filtering
   const filteredInvoices = invoices.filter(inv => {
     const matchesStatus = filterStatus === 'ALL' ? true : inv.status === filterStatus;
     const matchesCompany = filterCompany ? inv.companyId === filterCompany : true;
-    const matchesCompetence = filterCompetence 
-      ? inv.competence.includes(filterCompetence) || convertCompetenceToDisplay(inv.competence).includes(filterCompetence)
-      : true;
+    const matchesCompetence = filterCompetence ? inv.competence === filterCompetence : true;
     
     return matchesStatus && matchesCompany && matchesCompetence;
   });
@@ -128,9 +150,7 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
     setReferenceDateInput(date);
     // Only auto-fill due date if it's empty to respect user edit
     if (date && !manualDueDate) {
-      const d = new Date(date);
-      d.setDate(d.getDate() + 30);
-      setManualDueDate(d.toISOString().split('T')[0]);
+      setManualDueDate(addDaysToDate(date, 30));
     }
   };
 
@@ -155,7 +175,6 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
       unitValue: unitPrice,
       totalValue: count * unitPrice,
       status: InvoiceStatus.PENDING,
-      // @ts-ignore
       notes: invoiceNotes
     });
     setIsModalOpen(false);
@@ -175,13 +194,28 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
     const date = e.target.value;
     setBatchReferenceDate(date);
     if (date) {
-      const d = new Date(date);
-      d.setDate(d.getDate() + 30);
-      setBatchDueDate(d.toISOString().split('T')[0]);
+      setBatchDueDate(addDaysToDate(date, 30));
     } else {
       setBatchDueDate('');
     }
   };
+
+  // Batch Sorting
+  const sortedBatchCompanies = [...companies.filter(c => c.status === 'Ativo')].sort((a, b) => {
+      const mult = batchSortConfig.direction === 'asc' ? 1 : -1;
+      if (batchSortConfig.key === 'name') {
+          return a.name.localeCompare(b.name) * mult;
+      } else {
+          return (a.employeeCount - b.employeeCount) * mult;
+      }
+  });
+
+  const toggleBatchSort = (key: 'name' | 'employeeCount') => {
+      setBatchSortConfig(curr => ({
+          key,
+          direction: curr.key === key && curr.direction === 'asc' ? 'desc' : 'asc'
+      }));
+  }
 
   const handleBatchSubmit = (e: React.FormEvent) => {
       e.preventDefault();
@@ -235,11 +269,11 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
           window.print();
       } else {
           const csvContent = "data:text/csv;charset=utf-8," 
-              + "Competencia,Empresa,Funcionarios,Valor,Vencimento,Status\n"
-              + invoices.map(i => `${convertCompetenceToDisplay(i.competence)},${i.companyName},${i.employeeCount},${i.totalValue},${i.dueDate},${i.status}`).join("\n");
+              + "Competencia,Empresa,Funcionarios,Valor,Vencimento,Status,Obs\n"
+              + invoices.map(i => `${convertCompetenceToDisplay(i.competence)},${i.companyName},${i.employeeCount},${i.totalValue},${i.dueDate},${i.status},${i.notes || ''}`).join("\n");
           const encodedUri = encodeURI(csvContent);
           const link = document.createElement("a");
-          link.setAttribute("href", encodedUri);
+          link.setAttribute("href", encodedUri as string);
           link.setAttribute("download", "faturas.csv");
           document.body.appendChild(link);
           link.click();
@@ -330,13 +364,17 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
-            <input 
-              type="text" 
-              placeholder="Filtro (MM/AAAA)..."
+            
+            <select 
               value={filterCompetence}
               onChange={(e) => setFilterCompetence(e.target.value)}
               className={`w-36 ${selectClass}`}
-            />
+            >
+                <option value="">Competência</option>
+                {uniqueCompetences.map(comp => (
+                    <option key={comp} value={comp}>{convertCompetenceToDisplay(comp)}</option>
+                ))}
+            </select>
             
             <div className="flex gap-1">
                 <button onClick={() => handleExport('CSV')} title="Exportar CSV" className="p-2 text-slate-500 hover:text-indigo-600 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded transition-colors">
@@ -404,6 +442,12 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
                   <tr key={inv.id} className="bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                     <td className="px-6 py-4 font-medium text-slate-900 dark:text-white">
                       {convertCompetenceToDisplay(inv.competence)}
+                      {inv.notes && (
+                          <div className="mt-1 flex items-center gap-1">
+                            <span className="text-[10px] bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-500 max-w-[80px] truncate">{inv.notes}</span>
+                            <button onClick={() => setViewNoteId(inv.id)} className="text-slate-400 hover:text-indigo-500"><Eye size={12} /></button>
+                          </div>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-slate-700 dark:text-slate-300">
                       {inv.companyName}
@@ -476,9 +520,16 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
                   className={inputClass}
                 >
                   <option value="">Selecione...</option>
-                  {companies.filter(c => c.status === 'Ativo').map(c => (
-                    <option key={c.id} value={c.id}>{c.name} ({c.employeeCount} func.)</option>
-                  ))}
+                  <optgroup label="Ativas">
+                    {companies.filter(c => c.status === 'Ativo').map(c => (
+                        <option key={c.id} value={c.id}>{c.name} ({c.employeeCount} func.)</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Inativas / Outras">
+                    {companies.filter(c => c.status !== 'Ativo').map(c => (
+                        <option key={c.id} value={c.id}>{c.name} - [{c.status}]</option>
+                    ))}
+                  </optgroup>
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -574,15 +625,19 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
                    </h4>
                    <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden">
                        <table className="w-full text-sm">
-                           <thead className="bg-slate-50 dark:bg-slate-950 text-xs text-slate-500 dark:text-slate-400 uppercase text-left">
+                           <thead className="bg-slate-50 dark:bg-slate-950 text-xs text-slate-500 dark:text-slate-400 uppercase text-left sticky top-0">
                                <tr>
-                                   <th className="px-4 py-2">Empresa</th>
-                                   <th className="px-4 py-2 w-32">Funcionários</th>
+                                   <th className="px-4 py-2 cursor-pointer hover:text-slate-700 dark:hover:text-slate-200" onClick={() => toggleBatchSort('name')}>
+                                       <div className="flex items-center gap-1">Empresa {batchSortConfig.key === 'name' && (batchSortConfig.direction === 'asc' ? <ArrowUp size={12}/> : <ArrowDown size={12}/>)}</div>
+                                   </th>
+                                   <th className="px-4 py-2 w-32 cursor-pointer hover:text-slate-700 dark:hover:text-slate-200" onClick={() => toggleBatchSort('employeeCount')}>
+                                       <div className="flex items-center gap-1">Funcionários {batchSortConfig.key === 'employeeCount' && (batchSortConfig.direction === 'asc' ? <ArrowUp size={12}/> : <ArrowDown size={12}/>)}</div>
+                                   </th>
                                    <th className="px-4 py-2 w-32 text-right">Valor Est.</th>
                                </tr>
                            </thead>
                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                               {companies.filter(c => c.status === 'Ativo').map(c => (
+                               {sortedBatchCompanies.map(c => (
                                    <tr key={c.id} className="bg-white dark:bg-slate-900">
                                        <td className="px-4 py-3 text-slate-800 dark:text-slate-200 font-medium">
                                            {c.name}
@@ -615,6 +670,21 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
             </form>
           </div>
         </div>
+      )}
+
+      {/* Note View Modal */}
+      {viewNoteId && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fadeIn backdrop-blur-sm">
+            <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-sm p-6 border border-slate-200 dark:border-slate-800">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-slate-800 dark:text-white">Notas da Fatura</h3>
+                    <button onClick={() => setViewNoteId(null)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+                </div>
+                <div className="bg-slate-50 dark:bg-slate-950 p-3 rounded border border-slate-100 dark:border-slate-800 text-sm text-slate-700 dark:text-slate-300 whitespace-pre-wrap">
+                    {invoices.find(i => i.id === viewNoteId)?.notes}
+                </div>
+            </div>
+          </div>
       )}
     </div>
   );

@@ -76,6 +76,15 @@ const Dashboard: React.FC<DashboardProps> = ({ companies, invoices, logs, onQuic
     });
   }
 
+  // --- Monitoring: Top Debtors ---
+  const debtByCompany: Record<string, number> = {};
+  invoices.filter(i => i.status === InvoiceStatus.OVERDUE).forEach(i => {
+      debtByCompany[i.companyName] = (debtByCompany[i.companyName] || 0) + i.totalValue;
+  });
+  const topDebtors = Object.entries(debtByCompany)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3);
+
   // --- Chart Styles based on Theme ---
   const isDark = theme === 'dark';
   const axisColor = isDark ? '#cbd5e1' : '#475569'; // slate-300 : slate-600
@@ -181,17 +190,35 @@ const Dashboard: React.FC<DashboardProps> = ({ companies, invoices, logs, onQuic
             <Activity className="text-indigo-600 dark:text-indigo-400" size={20} />
             Monitoramento
           </h3>
-          <div className="space-y-6 flex-1">
+          <div className="space-y-6 flex-1 overflow-y-auto">
+            
+            {/* Avg Employees */}
             <div>
-              <p className="text-sm text-slate-500 dark:text-slate-400">Média de Funcionários por Empresa</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Média de Funcionários/Empresa</p>
               <p className="text-2xl font-bold text-slate-800 dark:text-white mt-1">
                 {activeCompanies > 0 ? Math.round(totalEmployees / activeCompanies) : 0}
               </p>
-              <p className="text-xs text-green-600 dark:text-green-400 flex items-center gap-1 mt-1">
-                <TrendingUp size={12} /> +2% vs mês anterior
-              </p>
             </div>
+
+            {/* Top Debtors */}
+            {topDebtors.length > 0 && (
+                <div className="border-t border-slate-100 dark:border-slate-700 pt-4">
+                  <p className="text-sm text-slate-500 dark:text-slate-400 mb-3 font-semibold text-red-500">Top Inadimplentes</p>
+                  <div className="space-y-3">
+                    {topDebtors.map(([name, value], idx) => (
+                        <div key={idx} className="flex justify-between items-center text-sm">
+                          <span className="text-slate-700 dark:text-slate-300 truncate max-w-[150px]">{name}</span>
+                          <span className="font-medium text-red-600 dark:text-red-400">
+                             {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value)}
+                          </span>
+                        </div>
+                      ))
+                    }
+                  </div>
+                </div>
+            )}
             
+            {/* Growth */}
             <div className="border-t border-slate-100 dark:border-slate-700 pt-4">
               <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Empresas em Crescimento</p>
               <div className="space-y-3">

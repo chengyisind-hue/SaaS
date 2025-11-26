@@ -33,6 +33,7 @@ export interface Invoice {
   unitValue: number; // Defaults to 5.00
   totalValue: number;
   status: InvoiceStatus;
+  notes?: string;
 }
 
 export interface DashboardStats {
