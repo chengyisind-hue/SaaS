@@ -77,6 +77,7 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
 
   const convertCompetenceToDisplay = (comp: string) => {
     // YYYY-MM -> MM/YYYY
+    if (!comp) return '';
     const [year, month] = comp.split('-');
     if (year && month) return `${month}/${year}`;
     return comp;
@@ -268,15 +269,19 @@ const BillingList: React.FC<BillingListProps> = ({ invoices, companies, unitPric
       if (type === 'PDF') {
           window.print();
       } else {
-          const csvContent = "data:text/csv;charset=utf-8," 
-              + "Competencia,Empresa,Funcionarios,Valor,Vencimento,Status,Obs\n"
-              + invoices.map(i => `${convertCompetenceToDisplay(i.competence)},${i.companyName},${i.employeeCount},${i.totalValue},${i.dueDate},${i.status},${i.notes || ''}`).join("\n");
+          const headers = "Competencia,Empresa,Funcionarios,Valor,Vencimento,Status,Obs";
+          const rows = invoices.map((i: Invoice) => 
+              `${convertCompetenceToDisplay(i.competence)},${i.companyName},${i.employeeCount},${i.totalValue},${i.dueDate},${i.status},${i.notes || ''}`
+          ).join("\n");
+          
+          const csvContent = `data:text/csv;charset=utf-8,${headers}\n${rows}`;
           const encodedUri = encodeURI(csvContent);
           const link = document.createElement("a");
-          link.setAttribute("href", encodedUri as string);
-          link.setAttribute("download", "faturas.csv");
+          link.href = encodedUri;
+          link.download = "faturas.csv";
           document.body.appendChild(link);
           link.click();
+          document.body.removeChild(link);
       }
   };
 

@@ -42,16 +42,56 @@ const App: React.FC = () => {
   }, [settings]);
 
   // --- Logger ---
-  const addLog = (action: string, details: string, type: SystemLog['type'] = 'info') => {
-    const newLog: SystemLog = {
-      id: Math.random().toString(36).substr(2, 9),
-      action,
-      details,
-      timestamp: new Date().toISOString(),
-      user: session?.user?.email || 'Sistema',
-      type
-    };
-    setLogs(prev => [newLog, ...prev]);
+  const addLog = async (action: string, details: string, type: SystemLog['type'] = 'info') => {
+    // If in demo mode, use local state
+    if (isDemoMode) {
+      const newLog: SystemLog = {
+        id: Math.random().toString(36).substr(2, 9),
+        action,
+        details,
+        timestamp: new Date().toISOString(),
+        user: session?.user?.email || 'Sistema',
+        type
+      };
+      setLogs(prev => [newLog, ...prev]);
+      return;
+    }
+
+    // Fix: Fetch fresh user to ensure RLS policies pass (session might be stale in closure)
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // If no user and not in demo mode, we can't really log to the restricted table
+    if (!user) return;
+
+    try {
+      const { error } = await supabase.from('system_logs').insert([{
+        action,
+        details,
+        type,
+        user_email: user.email,
+        user_id: user.id
+      }]);
+      
+      if (error) {
+        // Ignore RLS errors specifically to prevent console spam if table policies aren't set
+        if (error.code !== '42501') {
+            console.error('Failed to save log:', error);
+        }
+      } else {
+        // Optimistically update local logs to show immediately
+         const newLog: SystemLog = {
+            id: Math.random().toString(),
+            action,
+            details,
+            timestamp: new Date().toISOString(),
+            user: user.email || 'Sistema',
+            type
+        };
+        setLogs(prev => [newLog, ...prev]);
+      }
+    } catch (e) {
+      console.error('Log error:', e);
+    }
   };
 
   // --- Auth & Init ---
@@ -82,7 +122,9 @@ const App: React.FC = () => {
     status: dbCompany.status as CompanyStatus,
     createdAt: dbCompany.created_at,
     employeeCount: dbCompany.employee_count || 0,
-    notes: dbCompany.notes
+    notes: dbCompany.notes,
+    companyKey: dbCompany.company_key,
+    integrationPassword: dbCompany.integration_password
   });
 
   const mapInvoiceFromDB = (dbInvoice: any): Invoice => ({
@@ -96,6 +138,15 @@ const App: React.FC = () => {
     totalValue: dbInvoice.total_value,
     status: dbInvoice.status as InvoiceStatus,
     notes: dbInvoice.notes
+  });
+
+  const mapLogFromDB = (dbLog: any): SystemLog => ({
+      id: dbLog.id,
+      action: dbLog.action,
+      details: dbLog.details,
+      timestamp: dbLog.created_at,
+      user: dbLog.user_email,
+      type: dbLog.type as any
   });
 
   // --- Fetch Data ---
@@ -120,7 +171,6 @@ const App: React.FC = () => {
 
     try {
       // SECURITY UPGRADE: Explicitly filter by user_id even if RLS fails
-      // Note: RLS is the primary security, this is a fallback/helper
       
       const { data: companiesData, error: companiesError } = await supabase
         .from('companies')
@@ -138,8 +188,16 @@ const App: React.FC = () => {
         
       if (invoicesError) throw invoicesError;
 
+      const { data: logsData, error: logsError } = await supabase
+        .from('system_logs')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
       const mappedCompanies = (companiesData || []).map(mapCompanyFromDB);
       let mappedInvoices = (invoicesData || []).map(mapInvoiceFromDB);
+      const mappedLogs = (logsData || []).map(mapLogFromDB);
 
       // Check Overdue
       const today = new Date().toISOString().split('T')[0];
@@ -162,6 +220,7 @@ const App: React.FC = () => {
 
       setCompanies(mappedCompanies);
       setInvoices(mappedInvoices);
+      if (!logsError) setLogs(mappedLogs);
       setIsDemoMode(false);
 
     } catch (error: any) {
@@ -184,12 +243,13 @@ const App: React.FC = () => {
 
   // --- CRUD Handlers ---
 
-  const handleAddCompany = async (newCompanyData: Omit<Company, 'id' | 'createdAt'>) => {
+  const handleAddCompany = async (newCompanyData: Omit<Company, 'id'>) => {
     const tempId = Math.random().toString();
-    const now = new Date().toISOString();
+    // Use provided creation date or fallback to now
+    const createdAt = newCompanyData.createdAt || new Date().toISOString();
 
     if (isDemoMode) {
-      const mockCompany = { ...newCompanyData, id: tempId, createdAt: now };
+      const mockCompany = { ...newCompanyData, id: tempId, createdAt };
       setCompanies(prev => [...prev, mockCompany]);
       addLog('Cadastro Empresa', `Empresa ${newCompanyData.name} cadastrada com ${newCompanyData.employeeCount} funcionários.`, 'success');
       return;
@@ -202,7 +262,10 @@ const App: React.FC = () => {
         contact_name: newCompanyData.contactName,
         status: newCompanyData.status,
         employee_count: newCompanyData.employeeCount,
+        created_at: createdAt, // Insert specific date
         notes: newCompanyData.notes,
+        company_key: newCompanyData.companyKey,
+        integration_password: newCompanyData.integrationPassword,
         user_id: session?.user?.id // VINCULA AO USUÁRIO LOGADO
       }]).select().single();
 
@@ -217,17 +280,18 @@ const App: React.FC = () => {
     }
   };
 
-  // Generic Update Handler (Status, Employees, Notes)
-  const handleUpdateCompany = async (id: string, updates: Partial<Company>) => {
+  // Generic Update Handler (Status, Employees, Notes, API Credentials)
+  const handleUpdateCompany = async (id: string, updates: Partial<Company>, skipLog = false) => {
     const company = companies.find(c => c.id === id);
     if (!company) return;
 
     if (isDemoMode) {
       setCompanies(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
-      
-      if (updates.status) addLog('Status Empresa', `Status da ${company.name} alterado para ${updates.status}.`, 'info');
-      if (updates.employeeCount !== undefined) addLog('Atualização Empresa', `Funcionários da ${company.name} atualizados para ${updates.employeeCount}.`, 'info');
-      if (updates.notes !== undefined) addLog('Nota Empresa', `Notas internas atualizadas para ${company.name}.`, 'info');
+      if (!skipLog) {
+          if (updates.status) addLog('Status Empresa', `Status da ${company.name} alterado para ${updates.status}.`, 'info');
+          if (updates.employeeCount !== undefined) addLog('Atualização Empresa', `Funcionários da ${company.name} atualizados para ${updates.employeeCount}.`, 'info');
+          if (updates.notes !== undefined) addLog('Nota Empresa', `Notas internas atualizadas para ${company.name}.`, 'info');
+      }
       return;
     }
 
@@ -236,14 +300,18 @@ const App: React.FC = () => {
       if (updates.status) dbUpdates.status = updates.status;
       if (updates.employeeCount !== undefined) dbUpdates.employee_count = updates.employeeCount;
       if (updates.notes !== undefined) dbUpdates.notes = updates.notes;
+      if (updates.companyKey !== undefined) dbUpdates.company_key = updates.companyKey;
+      if (updates.integrationPassword !== undefined) dbUpdates.integration_password = updates.integrationPassword;
 
       const { error } = await supabase.from('companies').update(dbUpdates).eq('id', id);
       if (error) throw error;
       
       setCompanies(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
       
-      if (updates.status) addLog('Status Empresa', `Status da ${company.name} alterado para ${updates.status}.`, 'info');
-      if (updates.employeeCount !== undefined) addLog('Atualização Empresa', `Funcionários da ${company.name} atualizados para ${updates.employeeCount}.`, 'info');
+      if (!skipLog) {
+        if (updates.status) addLog('Status Empresa', `Status da ${company.name} alterado para ${updates.status}.`, 'info');
+        if (updates.employeeCount !== undefined) addLog('Atualização Empresa', `Funcionários da ${company.name} atualizados para ${updates.employeeCount}.`, 'info');
+      }
     } catch (error: any) {
       alert(`Erro: ${error.message}`);
     }
@@ -309,8 +377,13 @@ const App: React.FC = () => {
   };
 
   const handleUpdateInvoiceStatus = async (id: string, status: InvoiceStatus) => {
+    // Functional update to avoid stale closures if using cached state
+    const updateLocalState = () => {
+        setInvoices(prev => prev.map(i => i.id === id ? { ...i, status } : i));
+    };
+
     if (isDemoMode) {
-      setInvoices(prev => prev.map(i => i.id === id ? { ...i, status } : i));
+      updateLocalState();
       addLog('Atualização Fatura', `Status da fatura alterado para ${status}.`, 'info');
       return;
     }
@@ -318,7 +391,7 @@ const App: React.FC = () => {
     try {
       const { error } = await supabase.from('invoices').update({ status }).eq('id', id);
       if (error) throw error;
-      setInvoices(prev => prev.map(i => i.id === id ? { ...i, status } : i));
+      updateLocalState();
       addLog('Atualização Fatura', `Status da fatura alterado para ${status}.`, 'info');
     } catch (error: any) {
       alert(`Erro: ${error.message}`);
@@ -343,7 +416,8 @@ const App: React.FC = () => {
   };
 
   const handleLogout = async () => {
-    addLog('Logout', 'Usuário desconectado.', 'info');
+    // Await log before signing out to ensure it saves
+    await addLog('Logout', 'Usuário desconectado.', 'info');
     await supabase.auth.signOut();
     // Clear data immediately to prevent ghost data for next user on same PC
     setCompanies([]);
@@ -391,6 +465,7 @@ const App: React.FC = () => {
           <CompanyList 
             companies={companies} 
             logs={logs}
+            settings={settings}
             onAddCompany={handleAddCompany} 
             onUpdateCompany={handleUpdateCompany}
             onDeleteCompany={handleDeleteCompany}

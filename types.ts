@@ -15,6 +15,8 @@ export interface Company {
   createdAt: string;
   employeeCount: number; // Stored count for auto-billing
   notes?: string; // Internal CRM notes
+  companyKey?: string; // API Integration Key
+  integrationPassword?: string; // API Integration Password
 }
 
 export enum InvoiceStatus {
@@ -57,4 +59,6 @@ export interface AppSettings {
   dueDay: number;
   apiKey: string;
   theme: 'light' | 'dark';
+  integrationUrl?: string; // New: External API URL
+  integrationToken?: string; // New: External API Token
 }

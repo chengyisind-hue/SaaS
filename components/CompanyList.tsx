@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Company, CompanyStatus, SystemLog } from '../types';
-import { Plus, Search, ArrowUpDown, ArrowUp, ArrowDown, Filter, Trash2, Edit, FileText, Activity, Save, Clock } from 'lucide-react';
+import { Company, CompanyStatus, SystemLog, AppSettings } from '../types';
+import { Plus, Search, ArrowUpDown, ArrowUp, ArrowDown, Filter, Trash2, Edit, FileText, Activity, Save, Clock, RefreshCw, Loader2, Key, Calendar } from 'lucide-react';
+import { fetchEmployeeCountsFromApi } from '../services/integrationService';
 
 interface CompanyListProps {
   companies: Company[];
   logs?: SystemLog[];
-  onAddCompany: (c: Omit<Company, 'id' | 'createdAt'>) => void;
+  settings?: AppSettings;
+  onAddCompany: (c: Omit<Company, 'id'>) => void;
   onUpdateCompany?: (id: string, updates: Partial<Company>) => void; // New generic update prop
   onUpdateStatus?: (id: string, status: CompanyStatus) => void; // Legacy prop fallback
   onDeleteCompany: (id: string) => void;
@@ -19,10 +21,11 @@ interface SortConfig {
   direction: 'asc' | 'desc';
 }
 
-const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCompany, onUpdateCompany, onUpdateStatus, onDeleteCompany, pendingAction, clearPendingAction }) => {
+const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], settings, onAddCompany, onUpdateCompany, onUpdateStatus, onDeleteCompany, pendingAction, clearPendingAction }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'name', direction: 'asc' });
+  const [isSyncing, setIsSyncing] = useState(false);
   
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -33,7 +36,10 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
   const [newCnpj, setNewCnpj] = useState('');
   const [newContact, setNewContact] = useState('');
   const [newEmployeeCount, setNewEmployeeCount] = useState<number>(0);
+  const [newCreatedAt, setNewCreatedAt] = useState(new Date().toISOString().split('T')[0]); // Default to today
   const [newNotes, setNewNotes] = useState('');
+  const [newCompanyKey, setNewCompanyKey] = useState('');
+  const [newIntegrationPassword, setNewIntegrationPassword] = useState('');
 
   // Handle Quick Action from Sidebar
   useEffect(() => {
@@ -42,6 +48,35 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
       if (clearPendingAction) clearPendingAction();
     }
   }, [pendingAction, clearPendingAction]);
+
+  const handleSyncWithApi = async () => {
+    // Only warn if general setting is missing AND at least one company doesn't have individual credentials
+    // For now, we assume if they are clicking this, they want to use the integration.
+    
+    setIsSyncing(true);
+    try {
+      // Pass the companies list to the service. The service will handle using individual or global keys.
+      // NOTE: integrationUrl is global, but keys/passwords are per company.
+      const updates = await fetchEmployeeCountsFromApi(settings?.integrationUrl || '', settings?.integrationToken || '', companies);
+      
+      let updatedCount = 0;
+      updates.forEach(update => {
+        const company = companies.find(c => c.cnpj === update.cnpj);
+        if (company && company.employeeCount !== update.activeEmployees) {
+          if (onUpdateCompany) {
+            onUpdateCompany(company.id, { employeeCount: update.activeEmployees });
+            updatedCount++;
+          }
+        }
+      });
+      
+      alert(`Sincronização concluída! ${updatedCount} empresas tiveram o número de funcionários atualizado.`);
+    } catch (error: any) {
+      alert(`Erro na sincronização: ${error.message}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // 1. Filtering
   const filteredCompanies = companies.filter(c => {
@@ -111,7 +146,10 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
       contactName: newContact,
       status: CompanyStatus.ACTIVE,
       employeeCount: newEmployeeCount,
-      notes: newNotes
+      createdAt: new Date(newCreatedAt).toISOString(),
+      notes: newNotes,
+      companyKey: newCompanyKey,
+      integrationPassword: newIntegrationPassword
     });
     setIsAddModalOpen(false);
     // Reset form
@@ -119,14 +157,19 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
     setNewCnpj('');
     setNewContact('');
     setNewEmployeeCount(0);
+    setNewCreatedAt(new Date().toISOString().split('T')[0]);
     setNewNotes('');
+    setNewCompanyKey('');
+    setNewIntegrationPassword('');
   };
 
   const handleSaveDetails = (updatedCompany: Company) => {
      if (onUpdateCompany) {
          onUpdateCompany(updatedCompany.id, {
              employeeCount: updatedCompany.employeeCount,
-             notes: updatedCompany.notes
+             notes: updatedCompany.notes,
+             companyKey: updatedCompany.companyKey,
+             integrationPassword: updatedCompany.integrationPassword
          });
      }
      setActiveCompany(null);
@@ -177,10 +220,13 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
   };
 
   // Filter logs for timeline
-  const getCompanyTimeline = (companyName: string) => {
-      return logs
-        .filter(l => l.details.includes(companyName) || l.action.includes(companyName))
+  const getCompanyTimeline = (company: Company) => {
+      const companyLogs = logs
+        .filter(l => l.details.includes(company.name) || l.action.includes(company.name))
         .sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      
+      // Fake initial log for creation if not present
+      return companyLogs;
   };
 
   const inputClass = "w-full p-2 bg-white dark:bg-slate-950 text-slate-900 dark:text-white border border-slate-300 dark:border-slate-700 rounded focus:ring-blue-500 outline-none";
@@ -189,13 +235,24 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
     <div className="space-y-6 animate-fadeIn">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Empresas Clientes</h2>
-        <button 
-          onClick={() => setIsAddModalOpen(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm"
-        >
-          <Plus size={18} />
-          Nova Empresa
-        </button>
+        <div className="flex gap-2">
+           <button 
+            onClick={handleSyncWithApi}
+            disabled={isSyncing}
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm"
+            title="Buscar quantidade de funcionários na API Externa"
+          >
+            {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+            Sincronizar (API)
+          </button>
+          <button 
+            onClick={() => setIsAddModalOpen(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors shadow-sm"
+          >
+            <Plus size={18} />
+            Nova Empresa
+          </button>
+        </div>
       </div>
 
       <div className="bg-white dark:bg-slate-900 rounded-lg shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden transition-colors">
@@ -243,6 +300,14 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
                   </div>
                 </th>
                 <th className="px-6 py-3">Contato</th>
+                 <th 
+                  className="px-6 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors select-none group"
+                  onClick={() => handleSort('createdAt')}
+                >
+                  <div className="flex items-center gap-1">
+                    Cadastro {getSortIcon('createdAt')}
+                  </div>
+                </th>
                 <th 
                   className="px-6 py-3 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors select-none group"
                   onClick={() => handleSort('employeeCount')}
@@ -272,6 +337,9 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
                     </td>
                     <td className="px-6 py-4 text-slate-700 dark:text-slate-300">
                       <div>{company.contactName}</div>
+                    </td>
+                    <td className="px-6 py-4 text-slate-700 dark:text-slate-300">
+                      <div>{new Date(company.createdAt).toLocaleDateString('pt-BR')}</div>
                     </td>
                     <td className="px-6 py-4 text-slate-700 dark:text-slate-300">
                         <div className="flex items-center gap-2">
@@ -316,7 +384,7 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
+                  <td colSpan={6} className="px-6 py-8 text-center text-slate-500 dark:text-slate-400">
                     Nenhuma empresa encontrada.
                   </td>
                 </tr>
@@ -329,11 +397,11 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
       {/* Add Company Modal */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-fadeIn backdrop-blur-sm">
-          <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-md border border-slate-200 dark:border-slate-800">
+          <div className="bg-white dark:bg-slate-900 rounded-lg shadow-xl w-full max-w-md border border-slate-200 dark:border-slate-800 flex flex-col max-h-[90vh]">
             <div className="p-6 border-b border-slate-200 dark:border-slate-800">
               <h3 className="text-xl font-bold text-slate-800 dark:text-white">Nova Empresa</h3>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+            <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Razão Social</label>
                 <input required value={newName} onChange={e => setNewName(e.target.value)} type="text" className={inputClass} />
@@ -342,14 +410,35 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">CNPJ</label>
                 <input required value={newCnpj} onChange={handleCnpjChange} type="text" className={inputClass} placeholder="00.000.000/0000-00" />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nome Contato</label>
-                <input required value={newContact} onChange={e => setNewContact(e.target.value)} type="text" className={inputClass} />
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Nome Contato</label>
+                    <input required value={newContact} onChange={e => setNewContact(e.target.value)} type="text" className={inputClass} />
+                 </div>
+                 <div>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Data Cadastro</label>
+                    <input required value={newCreatedAt} onChange={e => setNewCreatedAt(e.target.value)} type="date" className={inputClass} />
+                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Qtd. Funcionários</label>
                 <input required value={newEmployeeCount} onChange={e => setNewEmployeeCount(Number(e.target.value))} type="number" min="0" className={inputClass} />
               </div>
+              
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                <h4 className="text-xs font-semibold text-slate-500 uppercase mb-2">Integração Facilita Ponto</h4>
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-xs text-slate-600 dark:text-slate-400 mb-1">Chave da Empresa</label>
+                        <input value={newCompanyKey} onChange={e => setNewCompanyKey(e.target.value)} type="text" className={`${inputClass} text-sm`} placeholder="Ex: 001002" />
+                    </div>
+                     <div>
+                        <label className="block text-xs text-slate-600 dark:text-slate-400 mb-1">Senha Integração</label>
+                        <input value={newIntegrationPassword} onChange={e => setNewIntegrationPassword(e.target.value)} type="text" className={`${inputClass} text-sm`} placeholder="******" />
+                    </div>
+                </div>
+              </div>
+
                <div>
                 <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notas Internas</label>
                 <textarea value={newNotes} onChange={e => setNewNotes(e.target.value)} rows={2} className={`${inputClass} text-sm`} placeholder="Detalhes iniciais..." />
@@ -373,7 +462,7 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
             <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-start">
               <div>
                  <h3 className="text-xl font-bold text-slate-800 dark:text-white">{activeCompany.name}</h3>
-                 <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">CNPJ: {activeCompany.cnpj} • Criado em {new Date(activeCompany.createdAt).toLocaleDateString()}</p>
+                 <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">CNPJ: {activeCompany.cnpj}</p>
               </div>
               <div className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusBadgeStyles(activeCompany.status)}`}>
                  {activeCompany.status}
@@ -382,6 +471,23 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
 
             <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-white dark:bg-slate-900">
                 
+                {/* Basic Info Read-only */}
+                 <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h4 className="text-sm font-bold text-slate-800 dark:text-white uppercase mb-4 flex items-center gap-2">
+                        <FileText size={16} /> Dados Cadastrais
+                    </h4>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                             <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Contato Responsável</label>
+                             <input type="text" value={activeCompany.contactName} disabled className={`${inputClass} bg-gray-100 dark:bg-slate-800 cursor-not-allowed text-slate-500`} />
+                        </div>
+                        <div>
+                             <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Data de Cadastro</label>
+                             <input type="date" value={activeCompany.createdAt.split('T')[0]} disabled className={`${inputClass} bg-gray-100 dark:bg-slate-800 cursor-not-allowed text-slate-500`} />
+                        </div>
+                    </div>
+                </div>
+
                 {/* Employee Count Section */}
                 <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-lg border border-slate-200 dark:border-slate-800">
                     <h4 className="text-sm font-bold text-slate-800 dark:text-white uppercase mb-4 flex items-center gap-2">
@@ -402,6 +508,43 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
                             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded flex items-center gap-2"
                         >
                             <Save size={16} /> Atualizar
+                        </button>
+                    </div>
+                </div>
+
+                {/* API Credentials */}
+                 <div className="bg-slate-50 dark:bg-slate-950 p-4 rounded-lg border border-slate-200 dark:border-slate-800">
+                    <h4 className="text-sm font-bold text-slate-800 dark:text-white uppercase mb-4 flex items-center gap-2">
+                        <Key size={16} /> Integração Facilita Ponto
+                    </h4>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                            <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Chave da Empresa</label>
+                            <input 
+                                type="text"
+                                value={activeCompany.companyKey || ''}
+                                onChange={(e) => setActiveCompany({...activeCompany, companyKey: e.target.value})}
+                                className={inputClass}
+                                placeholder="Ex: 001002"
+                            />
+                        </div>
+                        <div>
+                             <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">Senha Integração</label>
+                            <input 
+                                type="text"
+                                value={activeCompany.integrationPassword || ''}
+                                onChange={(e) => setActiveCompany({...activeCompany, integrationPassword: e.target.value})}
+                                className={inputClass}
+                                placeholder="******"
+                            />
+                        </div>
+                    </div>
+                    <div className="mt-3 flex justify-end">
+                        <button 
+                            onClick={() => handleSaveDetails(activeCompany)}
+                            className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                            Salvar Credenciais
                         </button>
                     </div>
                 </div>
@@ -434,8 +577,17 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
                         <Activity size={16} /> Linha do Tempo
                     </h4>
                     <div className="space-y-4 border-l-2 border-slate-200 dark:border-slate-800 pl-4 ml-2">
-                        {getCompanyTimeline(activeCompany.name).length > 0 ? (
-                             getCompanyTimeline(activeCompany.name).slice(0, 10).map((log) => (
+                        {/* Always show Creation Entry */}
+                         <div className="relative">
+                            <div className="absolute -left-[21px] top-1.5 w-2.5 h-2.5 rounded-full bg-emerald-400 dark:bg-emerald-600 ring-4 ring-white dark:ring-slate-900"></div>
+                            <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">Empresa Cadastrada</p>
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 flex items-center gap-1">
+                                <Clock size={10} /> {new Date(activeCompany.createdAt).toLocaleDateString()}
+                            </p>
+                        </div>
+                        
+                        {getCompanyTimeline(activeCompany).length > 0 ? (
+                             getCompanyTimeline(activeCompany).slice(0, 10).map((log) => (
                                 <div key={log.id} className="relative">
                                     <div className="absolute -left-[21px] top-1.5 w-2.5 h-2.5 rounded-full bg-slate-400 dark:bg-slate-600 ring-4 ring-white dark:ring-slate-900"></div>
                                     <p className="text-sm text-slate-800 dark:text-slate-200 font-medium">{log.action}</p>
@@ -445,9 +597,7 @@ const CompanyList: React.FC<CompanyListProps> = ({ companies, logs = [], onAddCo
                                     </p>
                                 </div>
                              ))
-                        ) : (
-                            <p className="text-sm text-slate-500 italic">Nenhuma atividade registrada recentemente.</p>
-                        )}
+                        ) : null}
                     </div>
                 </div>
 

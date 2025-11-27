@@ -16,12 +16,13 @@ const getEnvVar = (key: string) => {
   return undefined;
 };
 
-const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
-const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+// Use environment variables if present, otherwise use the provided specific project credentials
+const supabaseUrl = getEnvVar('VITE_SUPABASE_URL') || 'https://muhpuufgxdsezecbpfnj.supabase.co';
+const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY') || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im11aHB1dWZneGRzZXplY2JwZm5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQwNzgwNTEsImV4cCI6MjA3OTY1NDA1MX0.U9UwIkdoUTsFwpYwBieXsYNW0XGG2BddVDRDBLPuxhY';
 
 // Helper to check if we have valid credentials
 export const isSupabaseConfigured = () => {
-  return supabaseUrl && supabaseUrl.startsWith('http') && supabaseKey;
+  return supabaseUrl && supabaseUrl.startsWith('http') && supabaseKey && supabaseKey !== 'placeholder';
 };
 
 if (!isSupabaseConfigured()) {

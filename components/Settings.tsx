@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Save, Info, Settings as SettingsIcon, List, Search, Moon, Sun, Lock, Mail, Loader2 } from 'lucide-react';
+import { User, Save, Info, Settings as SettingsIcon, List, Search, Moon, Sun, Lock, Mail, Loader2, Link } from 'lucide-react';
 import { SystemLog, AppSettings } from '../types';
 import { supabase } from '../services/supabaseClient';
 
@@ -10,13 +10,17 @@ interface SettingsProps {
 }
 
 const Settings: React.FC<SettingsProps> = ({ logs = [], settings, onUpdateSettings }) => {
-  const [activeTab, setActiveTab] = useState<'GENERAL' | 'LOGS'>('GENERAL');
+  const [activeTab, setActiveTab] = useState<'GENERAL' | 'INTEGRATION' | 'LOGS'>('GENERAL');
   
   // Settings State
   const [unitPriceInput, setUnitPriceInput] = useState<number>(5.00);
   const [dueDayInput, setDueDayInput] = useState<number>(10);
   const [themeInput, setThemeInput] = useState<'light' | 'dark'>('light');
   
+  // Integration State
+  const [integrationUrl, setIntegrationUrl] = useState('');
+  const [integrationToken, setIntegrationToken] = useState('');
+
   // Profile State
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -33,6 +37,8 @@ const Settings: React.FC<SettingsProps> = ({ logs = [], settings, onUpdateSettin
       setUnitPriceInput(settings.unitPrice);
       setDueDayInput(settings.dueDay || 10);
       setThemeInput(settings.theme || 'light');
+      setIntegrationUrl(settings.integrationUrl || '');
+      setIntegrationToken(settings.integrationToken || '');
     }
     
     // Fetch current user email
@@ -46,10 +52,12 @@ const Settings: React.FC<SettingsProps> = ({ logs = [], settings, onUpdateSettin
       onUpdateSettings({ 
         unitPrice: unitPriceInput,
         dueDay: dueDayInput,
-        apiKey: settings?.apiKey || '', // Preserve existing
-        theme: themeInput
+        apiKey: settings?.apiKey || '', 
+        theme: themeInput,
+        integrationUrl,
+        integrationToken
       });
-      showFeedback("Configurações do sistema salvas.", 'success');
+      showFeedback("Configurações salvas com sucesso.", 'success');
     }
   };
 
@@ -112,6 +120,12 @@ const Settings: React.FC<SettingsProps> = ({ logs = [], settings, onUpdateSettin
             className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'GENERAL' ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-400 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900'}`}
           >
             <SettingsIcon size={18} /> Geral e Perfil
+          </button>
+          <button
+            onClick={() => setActiveTab('INTEGRATION')}
+            className={`w-full flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-colors ${activeTab === 'INTEGRATION' ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-400 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-900'}`}
+          >
+            <Link size={18} /> Integração
           </button>
           <button
             onClick={() => setActiveTab('LOGS')}
@@ -237,6 +251,49 @@ const Settings: React.FC<SettingsProps> = ({ logs = [], settings, onUpdateSettin
                 </form>
               </div>
 
+            </div>
+          )}
+          
+          {activeTab === 'INTEGRATION' && (
+            <div className="space-y-10 animate-fadeIn max-w-3xl">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-800 dark:text-white border-b border-slate-200 dark:border-slate-700 pb-2 mb-6">Conexão com WhiteLabel</h3>
+                <div className="p-4 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 rounded-lg mb-6">
+                   <p className="text-sm text-indigo-800 dark:text-indigo-300">
+                     Configure aqui a API do seu fornecedor de Ponto Eletrônico. O sistema usará o CNPJ como chave para sincronizar a quantidade de funcionários ativos.
+                   </p>
+                </div>
+                
+                <div className="grid gap-6">
+                   <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">URL da API (Endpoint)</label>
+                      <input 
+                        type="url"
+                        placeholder="Ex: https://api.pontowhitelabel.com/v1"
+                        value={integrationUrl}
+                        onChange={(e) => setIntegrationUrl(e.target.value)}
+                        className={inputClass}
+                      />
+                   </div>
+                   
+                   <div>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Token de Acesso (API Key)</label>
+                      <input 
+                        type="password"
+                        placeholder="Ex: sk_live_..."
+                        value={integrationToken}
+                        onChange={(e) => setIntegrationToken(e.target.value)}
+                        className={inputClass}
+                      />
+                   </div>
+                   
+                   <div>
+                    <button onClick={handleSaveGeneral} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded shadow-sm flex items-center gap-2 font-medium transition-colors">
+                      <Save size={18} /> Salvar Credenciais
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
